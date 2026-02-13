@@ -95,11 +95,29 @@ impl<K: Hash + Eq + Clone, V: Clone> LRUCache<K, V> {
 
         self.len += 1;
         if self.len > self.cap {
-            todo!("Implement eviction")
+            unsafe {
+                let last_entry = (*self.tail.as_ptr()).prev.unwrap();
+                let key = (*last_entry.as_ptr()).key.clone().unwrap();
+                let value = (*last_entry.as_ptr()).value.clone().unwrap();
+                let last_prev = (*last_entry.as_ptr()).prev.unwrap();
+                (*self.tail.as_ptr()).prev = Some(last_prev);
+                (*last_prev.as_ptr()).next = Some(self.tail);
+                self.hashmap.remove(&key);
+
+                let boxed = Box::from_raw(last_entry.as_ptr());
+                _ = boxed;
+
+                return Some((key, value));
+            }
         }
         None
     }
 
+    /// get value associated with the key
+    /// # `Arguments`
+    /// - `key` -> key of the mapping
+    /// # `Returns`
+    /// - None if key not exist, otherwise value associated with the key
     pub fn get(&mut self, key: K) -> Option<V> {
         let value = self.hashmap.get(&key);
 
@@ -125,6 +143,7 @@ impl<K: Hash + Eq + Clone, V: Clone> LRUCache<K, V> {
         None
     }
 
+    /// get first entry of the LRU cache
     pub fn get_first(&mut self) -> V {
         unsafe {
             let next = (*self.head.as_ptr()).next.unwrap();
@@ -132,6 +151,35 @@ impl<K: Hash + Eq + Clone, V: Clone> LRUCache<K, V> {
             let value = (*next.as_ptr()).value.clone();
 
             value.unwrap()
+        }
+    }
+
+    /// get last entry of the LRU cache
+    pub fn get_last(&mut self) -> V {
+        unsafe {
+            let prev = (*self.tail.as_ptr()).prev.unwrap();
+
+            let value = (*prev.as_ptr()).value.clone();
+
+            value.unwrap()
+        }
+    }
+}
+
+impl<K: Hash + Eq + Clone, V: Clone> Drop for LRUCache<K, V> {
+    fn drop(&mut self) {
+        let mut curr = self.head;
+        loop {
+            unsafe {
+                let next = (*curr.as_ptr()).next;
+                if next.is_none() {
+                    return;
+                }
+                let next = next.unwrap();
+                let boxed_c = Box::from_raw(curr.as_ptr());
+                _ = boxed_c;
+                curr = next;
+            }
         }
     }
 }
@@ -156,5 +204,24 @@ mod tests {
 
         lru.add(3, 3);
         assert_eq!(lru.get_first(), 3);
+    }
+
+    #[test]
+    fn test_eviction() {
+        let mut lru: LRUCache<u64, u64> = LRUCache::new(1);
+
+        let res = lru.add(1, 1);
+        assert!(res.is_none());
+
+        let res = lru.add(2, 2);
+        assert_eq!(Some((1, 1)), res);
+
+        assert_eq!(lru.get_first(), 2);
+
+        let value = lru.get(1);
+        assert_eq!(None, value);
+
+        let value = lru.get(2);
+        assert_eq!(Some(2), value);
     }
 }
