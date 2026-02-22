@@ -72,14 +72,22 @@ impl<K: Hash + Eq + Clone, V: Clone> LRUCache<K, V> {
     /// # `Returns`
     /// None if no keys were evicted, (key, value) if a key was evicted
     pub fn add(&mut self, key: K, value: V) -> Option<(K, V)> {
-        let node = Node {
-            key: Some(key.clone()),
-            value: Some(value),
-            prev: None,
-            next: None,
+        let node = if let Some(v) = self.hashmap.get(&key) {
+            unsafe {
+                (*v.as_ptr()).value = Some(value);
+            }
+            v.as_ptr()
+        } else {
+            let node = Node {
+                key: Some(key.clone()),
+                value: Some(value),
+                prev: None,
+                next: None,
+            };
+            self.len += 1;
+            Box::into_raw(Box::new(node))
         };
 
-        let node = Box::into_raw(Box::new(node));
         unsafe {
             let node = NonNull::new_unchecked(node);
             (*node.as_ptr()).prev = Some(self.head);
@@ -93,7 +101,6 @@ impl<K: Hash + Eq + Clone, V: Clone> LRUCache<K, V> {
             self.hashmap.insert(key, node);
         }
 
-        self.len += 1;
         if self.len > self.cap {
             unsafe {
                 let last_entry = (*self.tail.as_ptr()).prev.unwrap();
@@ -109,6 +116,27 @@ impl<K: Hash + Eq + Clone, V: Clone> LRUCache<K, V> {
 
                 return Some((key, value));
             }
+        }
+        None
+    }
+
+    /// removes values from the hashmap
+    pub fn remove(&mut self, key: K) -> Option<V> {
+        let value = self.hashmap.remove(&key);
+        if let Some(value) = value {
+            let val = unsafe {
+                let prev = (*value.as_ptr()).prev.unwrap();
+                let next = (*value.as_ptr()).next.unwrap();
+
+                (*prev.as_ptr()).next = Some(next);
+                (*next.as_ptr()).prev = Some(prev);
+                let val = (*value.as_ptr()).value.clone();
+                let boxed = Box::from_raw(value.as_ptr());
+                _ = boxed;
+                val
+            };
+            self.len -= 1;
+            return val;
         }
         None
     }
@@ -143,6 +171,22 @@ impl<K: Hash + Eq + Clone, V: Clone> LRUCache<K, V> {
         None
     }
 
+    /// peek if a value associated to the key is present in the cache
+    /// does not promote the entry
+    /// # `Arguments`
+    /// - `key` -> key of the mapping
+    /// # `Returns`
+    /// - None if key does not exist, otherwise the value associated with the key
+    pub fn peek(&mut self, key: K) -> Option<V> {
+        let value = self.hashmap.get(&key);
+        if let Some(value) = value {
+            let value = unsafe { (*value.as_ptr()).value.clone() };
+
+            return value;
+        }
+        None
+    }
+
     /// get first entry of the LRU cache
     pub fn get_first(&mut self) -> V {
         unsafe {
@@ -163,6 +207,16 @@ impl<K: Hash + Eq + Clone, V: Clone> LRUCache<K, V> {
 
             value.unwrap()
         }
+    }
+
+    /// returns the length of the cache
+    pub fn len(&mut self) -> usize {
+        self.len
+    }
+
+    /// returns `true` if the cache is empty
+    pub fn is_empty(&mut self) -> bool {
+        self.len == 0
     }
 }
 
@@ -223,5 +277,47 @@ mod tests {
 
         let value = lru.get(2);
         assert_eq!(Some(2), value);
+    }
+
+    #[test]
+    fn test_peek() {
+        let mut lru: LRUCache<u64, u64> = LRUCache::new(5);
+
+        lru.add(1, 1);
+        lru.add(2, 2);
+
+        assert_eq!(lru.get_first(), 2);
+        lru.peek(1);
+        assert_eq!(lru.get_first(), 2); // did not promote because of peek, so first is still 2
+
+        lru.get(1);
+        assert_eq!(lru.get_first(), 1); // promoted because of get, so first is 1
+    }
+
+    #[test]
+    fn test_remove() {
+        let mut lru: LRUCache<u64, u64> = LRUCache::new(5);
+
+        lru.add(1, 1);
+        lru.add(2, 2);
+        assert_eq!(lru.len(), 2);
+        assert_eq!(lru.get_first(), 2);
+        lru.remove(1);
+        assert_eq!(lru.get_first(), 2);
+        assert_eq!(lru.get_last(), 2);
+        assert_eq!(lru.len(), 1);
+
+        let value = lru.get(1);
+        assert!(value.is_none())
+    }
+
+    #[test]
+    fn test_update() {
+        let mut lru: LRUCache<u64, u64> = LRUCache::new(5);
+        lru.add(1, 1);
+        lru.add(2, 2);
+        lru.add(1, 3);
+        assert_eq!(lru.len(), 2);
+        assert_eq!(lru.get_first(), 3);
     }
 }
